@@ -1,73 +1,69 @@
-from loaders.loader import load_documents
-from splitters.splitter import split_docs
-from vectorstore.vectorstore import build_vector_store
-from RAG.memory import create_memory
-from RAG.pipeline import create_rag_prompt
-from dotenv import load_dotenv
 from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage,AIMessage
+from langchain_core.messages import HumanMessage
+from langchain_core.output_parsers import StrOutputParser
+from RAG.memory import create_memory
+from RAG.pipeline import create_query_rewrite_prompt,rerank_documents
 
-load_dotenv()
+def build_rag_pipeline(vector_store):
 
-SMALL_TALK = [
-    "hi", "hello", "hey", "how are you",
-    "who are you", "what can you do",
-    "good morning", "good evening"
-    ]
+    retriever = vector_store.as_retriever(search_kwargs={"k": 6})
 
-def is_small_talk(query: str) -> bool:
-    return query.lower().strip() in SMALL_TALK
+    llm = ChatGroq(model="llama-3.1-8b-instant")
 
+    memory = create_memory()
 
+    rewrite_prompt = create_query_rewrite_prompt()
+    rag_prompt = create_rag_prompt()
 
+    parser = StrOutputParser()
 
-def run_chatbot(text:str,pdf_path:list[str]):
-    #load data
-    docs=load_documents(text,pdf_path)
+    def rag_chain(query):
+        chat_history = memory.load_memory_variables({})["chat_history"]
 
-    #2 chunking
-    chunks=split_docs(docs)
+        # 🔥 Step 1: Rewrite query
+        rewritten_query = (rewrite_prompt | llm | parser).invoke({
+            "chat_history": chat_history,
+            "question": query
+        })
 
-    #3)vectordb
-    vector_store=build_vector_store(chunks)
+        # 🔥 Step 2: Retrieve docs
+        docs = retriever.invoke(rewritten_query)
 
-    retriever=vector_store.as_retriever(search_kwargs={"k":4})
+        # 🔥 Step 3: Re-rank docs
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        docs = rerank_documents(docs, rewritten_query, embeddings)
 
-    prompt=create_rag_prompt()
+        context = "\n\n".join(doc.page_content for doc in docs)
 
-    memory=[]
+        # 🔥 Step 4: Final answer
+        answer = (rag_prompt | llm | parser).invoke({
+            "chat_history": chat_history,
+            "context": context,
+            "question": query
+        })
 
-    llm=ChatGroq(model="llama-3.1-8b-instant")
+        # 🔥 Step 5: Save memory
+        memory.save_context({"input": query}, {"output": answer})
 
-    chain=prompt | llm
+        return answer
 
+    return rag_chain
 
+def run_chatbot(text, pdf_paths):
+    docs = load_documents(text, pdf_paths)
+    chunks = split_docs(docs)
+    vector_store = build_vector_store(chunks)
 
-
-
+    rag_chain = build_rag_pipeline(vector_store)
 
     while True:
-        query=input("user ",)
-        if query.lower()=="exit":
-            print("Bye 👋")
+        query = input("User: ")
+        if query.lower() == "exit":
             break
-        memory.append(HumanMessage(query))
 
         if is_small_talk(query):
-            result = llm.invoke(query)
-            print("AI:", result.content)
-            memory.append(AIMessage(content=result.content))
+            print("AI:", "Hello! How can I help you?")
             continue
 
-
-        docs=retriever.invoke(query)
-        context="\n\n".join(doc.page_content for doc in docs)
-       
-        result=chain.invoke({"question":query,"chat_history":memory,"context":context})
-
-        memory.append(result)
-        print("AI:", result.content, "\n")
-        # print(memory,"\n")
-    
-
-run_chatbot("virat kohli is a great leader",["D:/GEN AI Langchain/demo files/dl-curriculum.pdf"])
+        answer = rag_chain(query)
+        print("AI:", answer, "\n")

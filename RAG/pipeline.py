@@ -1,50 +1,31 @@
 from langchain_core.prompts import PromptTemplate
 
-def create_rag_prompt():
+def create_query_rewrite_prompt():
     template = """
-You are a professional AI assistant helping users understand documents.
+Rewrite the user's question into a standalone question.
 
-Rules:
-- Use ONLY the provided context to answer.
-- Use the conversation history to understand follow-up questions.
-- If the answer is not present in the context, say:
-  "I don't have enough information in the provided documents."
-- Be concise, clear, and factual.
-- Do NOT make up information.
-
-Conversation History:
+Chat History:
 {chat_history}
 
-Context:
-{context}
-
-User Question:
+Follow-up Question:
 {question}
 
-Answer:
+Rewritten Question:
 """
     return PromptTemplate(
-        input_variables=["chat_history", "context", "question"],
+        input_variables=["chat_history", "question"],
         template=template
     )
 
-def build_conversational_rag(llm,vectorstore,memory):
 
-    retriever=vectorstore.as_retriever(search_kwargs={"k":4})
-    
+def rerank_documents(docs, query, embeddings):
+    query_embedding = embeddings.embed_query(query)
 
-    prompt=create_rag_prompt()
+    scored_docs = []
+    for doc in docs:
+        doc_embedding = embeddings.embed_query(doc.page_content)
+        score = sum([a*b for a, b in zip(query_embedding, doc_embedding)])
+        scored_docs.append((score, doc))
 
-    chain=ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=retriever,
-        memory=memory,
-        combine_docs_chain_kwargs={
-            "prompt": prompt
-        },
-        verbose=True
-    )
-
-    return chain
-
-
+    scored_docs.sort(key=lambda x: x[0], reverse=True)
+    return [doc for _, doc in scored_docs[:3]]  # top 3

@@ -1,9 +1,15 @@
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import Chroma
 
 def build_vector_store(chunks):
-    embeddings=HuggingFaceEmbeddings(
-        model="sentence-transformers/all-MiniLM-L6-v2"
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
-    vector_store=FAISS.from_documents(chunks,embeddings)
+
+    vector_store = Chroma.from_documents(
+        documents=chunks,
+        embedding=embeddings,
+        persist_directory="./chroma_db"  # ✅ persistent storage
+    )
+
     return vector_store
